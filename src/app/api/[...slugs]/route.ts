@@ -45,7 +45,7 @@ const rooms = new Elysia({ prefix: '/room' })
       const connected = meta.connected ?? [];
 
       // already joined → idempotent
-      if (connected.includes(auth.token)) {
+      if (connected.includes(auth.token as string)) {
         return { ok: true };
       }
 
@@ -105,7 +105,7 @@ const message = new Elysia({ prefix: '/messages' })
         throw new Error('Room does not exist');
       }
 
-      if (!meta.connected?.includes(token)) {
+      if (!meta.connected?.includes(token as string)) {
         throw new Error('User is not joined to the room');
       }
 
