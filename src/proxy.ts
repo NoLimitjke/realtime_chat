@@ -3,46 +3,38 @@ import { redis } from './lib/redis';
 import { nanoid } from 'nanoid';
 
 export const proxy = async (req: NextRequest) => {
-  const pathname = req.nextUrl.pathname;
+  const { pathname } = req.nextUrl;
 
-  const roomMatch = pathname.match(/^\/room\/([^/]+)$/);
-  if (!roomMatch) {
+  const match = pathname.match(/^\/room\/([^/]+)$/);
+  if (!match) {
     return NextResponse.redirect(new URL('/', req.url));
   }
 
-  const roomId = roomMatch[1];
+  const roomId = match[1];
 
-  const meta = await redis.hgetall<{ connected: string[]; createdAt: number }>(`meta:${roomId}`);
-
-  if (!meta) {
+  // 1️⃣ Проверяем, существует ли комната
+  const exists = await redis.exists(`meta:${roomId}`);
+  if (!exists) {
     return NextResponse.redirect(new URL('/?error=room-not-found', req.url));
   }
 
-  const existingToken = req.cookies.get('x-auth-token')?.value;
-
-  if (existingToken && meta.connected.includes(existingToken)) {
+  // 2️⃣ Проверяем, есть ли токен
+  const token = req.cookies.get('x-auth-token')?.value;
+  if (token) {
     return NextResponse.next();
   }
 
-  if (meta.connected.length >= 2) {
-    return NextResponse.redirect(new URL('/?error=room-full', req.url));
-  }
+  // 3️⃣ Если токена нет — просто выдаём его
+  const response = NextResponse.next();
 
-  const responce = NextResponse.next();
-  const token = nanoid();
-
-  responce.cookies.set('x-auth-token', token, {
+  response.cookies.set('x-auth-token', nanoid(), {
     path: '/',
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
   });
 
-  await redis.hset(`meta:${roomId}`, {
-    connected: [...meta.connected, token],
-  });
-
-  return responce;
+  return response;
 };
 
 export const config = {

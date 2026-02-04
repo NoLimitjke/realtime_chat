@@ -7,7 +7,11 @@ import { Message, realtime } from '@/lib/realtime';
 
 const ROOM_TTL_SECONDS = 60 * 10;
 
+/* ===================== ROOMS ===================== */
+
 const rooms = new Elysia({ prefix: '/room' })
+
+  // ---------- CREATE ROOM ----------
   .post('/create', async () => {
     const roomId = nanoid();
 
@@ -20,7 +24,49 @@ const rooms = new Elysia({ prefix: '/room' })
 
     return { roomId };
   })
+
   .use(authMiddleware)
+
+  // ---------- JOIN ROOM (IMPORTANT) ----------
+  .post(
+    '/join',
+    async ({ auth }) => {
+      const key = `meta:${auth.roomId}`;
+
+      const meta = await redis.hgetall<{
+        connected: string[];
+        createdAt: number;
+      }>(key);
+
+      if (!meta) {
+        throw new Error('Room does not exist');
+      }
+
+      const connected = meta.connected ?? [];
+
+      // already joined → idempotent
+      if (connected.includes(auth.token)) {
+        return { ok: true };
+      }
+
+      if (connected.length >= 2) {
+        throw new Error('Room full');
+      }
+
+      await redis.hset(key, {
+        connected: [...connected, auth.token],
+      });
+
+      return { ok: true };
+    },
+    {
+      query: z.object({
+        roomId: z.string(),
+      }),
+    },
+  )
+
+  // ---------- ROOM TTL ----------
   .get(
     '/ttl',
     async ({ auth }) => {
@@ -29,31 +75,38 @@ const rooms = new Elysia({ prefix: '/room' })
     },
     { query: z.object({ roomId: z.string() }) },
   )
+
+  // ---------- DESTROY ROOM ----------
   .delete(
     '/',
     async ({ auth }) => {
       await realtime.channel(auth.roomId).emit('chat.destroy', { isDestroyed: true });
 
-      await Promise.all([
-        redis.del(auth.roomId),
-        redis.del(`meta:${auth.roomId}`),
-        redis.del(`messages:${auth.roomId}`),
-      ]);
+      await Promise.all([redis.del(`meta:${auth.roomId}`), redis.del(`messages:${auth.roomId}`)]);
     },
     { query: z.object({ roomId: z.string() }) },
   );
 
+/* ===================== MESSAGES ===================== */
+
 const message = new Elysia({ prefix: '/messages' })
   .use(authMiddleware)
+
+  // ---------- SEND MESSAGE ----------
   .post(
     '/',
     async ({ body, auth }) => {
       const { sender, text } = body;
-      const { roomId } = auth;
+      const { roomId, token } = auth;
 
-      const roomExist = await redis.exists(`meta:${roomId}`);
-      if (!roomExist) {
+      const meta = await redis.hgetall<{ connected: string[] }>(`meta:${roomId}`);
+
+      if (!meta) {
         throw new Error('Room does not exist');
+      }
+
+      if (!meta.connected?.includes(token)) {
+        throw new Error('User is not joined to the room');
       }
 
       const message: Message = {
@@ -66,16 +119,16 @@ const message = new Elysia({ prefix: '/messages' })
 
       await redis.rpush(`messages:${roomId}`, {
         ...message,
-        token: auth.token,
+        token,
       });
+
       await realtime.channel(roomId).emit('chat.message', message);
 
+      // keep TTL in sync
       const remaining = await redis.ttl(`meta:${roomId}`);
-
-      await redis.expire(`messages:${roomId}`, remaining);
-      await redis.expire(`history:${roomId}`, remaining);
-
-      await redis.expire(roomId, remaining);
+      if (remaining > 0) {
+        await redis.expire(`messages:${roomId}`, remaining);
+      }
     },
     {
       query: z.object({ roomId: z.string() }),
@@ -85,6 +138,8 @@ const message = new Elysia({ prefix: '/messages' })
       }),
     },
   )
+
+  // ---------- GET MESSAGES ----------
   .get(
     '/',
     async ({ auth }) => {
@@ -99,6 +154,8 @@ const message = new Elysia({ prefix: '/messages' })
     },
     { query: z.object({ roomId: z.string() }) },
   );
+
+/* ===================== APP ===================== */
 
 const app = new Elysia({ prefix: '/api' }).use(rooms).use(message);
 

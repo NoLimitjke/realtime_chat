@@ -81,6 +81,22 @@ const Page = () => {
     },
   });
 
+  const { mutate: joinRoom } = useMutation({
+    mutationFn: async () => {
+      await client.room.join.post(null, {
+        query: { roomId },
+      });
+    },
+    onError: () => {
+      router.push('/?error=room-full');
+    },
+  });
+
+  React.useEffect(() => {
+    if (!roomId) return;
+    joinRoom();
+  }, [roomId]);
+
   const { mutate: destroyRoom } = useMutation({
     mutationFn: async () => {
       await client.room.delete(null, { query: { roomId } });
