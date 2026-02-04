@@ -7,7 +7,7 @@
 
 # Проект задеплоен на Vercel
 
-Ссылка для просмотра проекта: https://realtime-chat-phi-gules.vercel.app/
+Ссылка для просмотра проекта: [https://realtime-chat-phi-gules.vercel.app/](https://realtime-chat-peach.vercel.app/)
 
 ---
 
